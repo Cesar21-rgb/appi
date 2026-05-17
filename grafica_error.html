@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Error PID</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;500;700&display=swap');
+
+  :root {
+    --bg: #0a0e1a;
+    --panel: #0f1525;
+    --border: #1e2d4a;
+    --accent: #00e5ff;
+    --accent2: #ff3d6b;
+    --grid: rgba(0,229,255,0.06);
+    --text: #c8d8f0;
+    --dim: #3a5070;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent2);
+    box-shadow: 0 0 8px var(--accent2);
+    transition: background .3s, box-shadow .3s;
+  }
+  #status-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  /* ── métricas ── */
+  .metrics {
+    display: flex;
+    gap: 12px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .metric {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .metric-label {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+  .metric-value {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 22px;
+    color: var(--accent);
+    line-height: 1.1;
+    transition: color .2s;
+  }
+  .metric-value.negative { color: var(--accent2); }
+
+  /* ── canvas wrapper ── */
+  .chart-wrap {
+    flex: 1;
+    position: relative;
+    padding: 8px 16px 8px;
+  }
+  canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+  }
+
+  /* ── línea cero ── */
+  .zero-label {
+    position: absolute;
+    right: 20px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    color: var(--dim);
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PID · Error</h1>
+  <div style="display:flex;align-items:center;gap:8px">
+    <span style="font-size:10px;letter-spacing:1px;color:var(--dim)" id="status-text">SIN DATOS</span>
+    <div id="status-dot"></div>
+  </div>
+</header>
+
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-label">Error actual</div>
+    <div class="metric-value" id="val-current">—</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Máximo</div>
+    <div class="metric-value" id="val-max">—</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Mínimo</div>
+    <div class="metric-value" id="val-min">—</div>
+  </div>
+  <div class="metric">
+    <div class="metric-label">Muestras</div>
+    <div class="metric-value" id="val-count" style="color:var(--text);font-size:18px">0</div>
+  </div>
+</div>
+
+<div class="chart-wrap">
+  <canvas id="chart"></canvas>
+</div>
+
+<script>
+// ── datos ──────────────────────────────────────────────
+const MAX_POINTS = 80;
+const data = [];
+let maxVal = -Infinity, minVal = Infinity, count = 0;
+
+// ── canvas setup ───────────────────────────────────────
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  const wrap = canvas.parentElement;
+  canvas.width  = wrap.clientWidth  - 32;
+  canvas.height = wrap.clientHeight - 16;
+  draw();
+}
+window.addEventListener('resize', resize);
+setTimeout(resize, 50);
+
+// ── dibujo ─────────────────────────────────────────────
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // rango visible
+  const allVals = data.length ? data : [0];
+  const dmax = Math.max(Math.max(...allVals),  500);
+  const dmin = Math.min(Math.min(...allVals), -500);
+  const range = dmax - dmin || 1000;
+  const pad = range * 0.12;
+  const top = dmax + pad, bot = dmin - pad;
+  const span = top - bot;
+
+  function yOf(v) { return H - ((v - bot) / span) * H; }
+  function xOf(i) { return (i / (MAX_POINTS - 1)) * W; }
+
+  // grid horizontal
+  const step = range > 3000 ? 1000 : range > 1000 ? 500 : 250;
+  ctx.strokeStyle = 'rgba(0,229,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let v = Math.ceil(bot/step)*step; v <= top; v += step) {
+    const y = yOf(v);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(58,80,112,0.9)';
+    ctx.font = '9px Share Tech Mono, monospace';
+    ctx.fillText(v, 4, y - 3);
+  }
+
+  // línea cero
+  const y0 = yOf(0);
+  ctx.strokeStyle = 'rgba(0,229,255,0.25)';
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(W, y0); ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (data.length < 2) return;
+
+  // fill bajo la curva (positivo / negativo por separado)
+  // positivo (arriba del cero)
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), y0);
+  data.forEach((v, i) => ctx.lineTo(xOf(i), yOf(v)));
+  ctx.lineTo(xOf(data.length - 1), y0);
+  ctx.closePath();
+  const gradPos = ctx.createLinearGradient(0, 0, 0, H);
+  gradPos.addColorStop(0,   'rgba(0,229,255,0.18)');
+  gradPos.addColorStop(0.6, 'rgba(0,229,255,0.02)');
+  ctx.fillStyle = gradPos;
+  ctx.fill();
+
+  // curva principal
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = xOf(i), y = yOf(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = 'rgba(0,229,255,0.9)';
+  ctx.lineWidth = 1.8;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // punto actual
+  const lx = xOf(data.length - 1), ly = yOf(data[data.length - 1]);
+  ctx.beginPath();
+  ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+  ctx.fillStyle = data[data.length-1] >= 0 ? '#00e5ff' : '#ff3d6b';
+  ctx.fill();
+}
+
+// ── recibir valor desde App Inventor ───────────────────
+// App Inventor llamará:  window.recibirError(valor)
+window.recibirError = function(val) {
+  const n = parseInt(val, 10);
+  if (isNaN(n)) return;
+
+  count++;
+  data.push(n);
+  if (data.length > MAX_POINTS) data.shift();
+
+  if (n > maxVal) maxVal = n;
+  if (n < minVal) minVal = n;
+
+  // UI
+  const cur = document.getElementById('val-current');
+  cur.textContent = n;
+  cur.className = 'metric-value' + (n < 0 ? ' negative' : '');
+  document.getElementById('val-max').textContent = maxVal;
+  document.getElementById('val-min').textContent = minVal;
+  document.getElementById('val-min').className = 'metric-value' + (minVal < 0 ? ' negative' : '');
+  document.getElementById('val-count').textContent = count;
+
+  const dot = document.getElementById('status-dot');
+  dot.classList.add('active');
+  document.getElementById('status-text').textContent = 'EN VIVO';
+
+  draw();
+};
+
+// demo inicial (se borra al llegar datos reales)
+const demoData = [0,40,120,250,310,280,200,130,60,10,-30,-80,-120,-90,-40,20,80,150,220,260,230,160,90,30,-20,-70,-110,-80,-30,30];
+demoData.forEach(v => { data.push(v); if(data.length>MAX_POINTS) data.shift(); });
+draw();
+</script>
+</body>
+</html>
